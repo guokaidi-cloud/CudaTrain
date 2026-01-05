@@ -1,0 +1,44 @@
+cmake_minimum_required(VERSION 3.18)
+
+# 项目名称和语言
+project(CudaTrain LANGUAGES CXX CUDA)
+
+# 设置C++标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 设置CUDA标准
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+# 查找CUDA Toolkit
+find_package(CUDAToolkit REQUIRED)
+
+# 设置CUDA架构（根据您的GPU调整）
+# 常见架构: 70(V100), 75(RTX 20系列), 80(A100), 86(RTX 30系列), 89(RTX 40系列)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 89)
+endif()
+
+# 设置编译选项
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -lineinfo")
+
+# Debug模式下的编译选项
+set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G -g")
+
+# Release模式下的编译选项
+set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -O3")
+
+# 输出目录设置
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+# 打印CUDA信息
+message(STATUS "CUDA Version: ${CUDAToolkit_VERSION}")
+message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+message(STATUS "CUDA Include Dirs: ${CUDAToolkit_INCLUDE_DIRS}")
+
+# 添加子目录
+add_subdirectory(MatrixMultiply)
+

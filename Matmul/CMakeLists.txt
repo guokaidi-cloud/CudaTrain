@@ -7,26 +7,32 @@ file(GLOB_RECURSE HEADERS "*.h" "*.hpp" "*.cuh")
 
 # 如果有源文件则创建可执行文件
 if(CUDA_SOURCES OR CPP_SOURCES)
-    add_executable(matrix_multiply
+    add_executable(matmul
         ${CUDA_SOURCES}
         ${CPP_SOURCES}
         ${HEADERS}
     )
 
-    # 链接CUDA运行时库
-    target_link_libraries(matrix_multiply PRIVATE
+    # 链接CUDA运行时库和工具库
+    target_link_libraries(matmul PRIVATE
         CUDA::cudart
+        cuda_utils
     )
 
     # 设置包含目录
-    target_include_directories(matrix_multiply PRIVATE
+    target_include_directories(matmul PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CUDAToolkit_INCLUDE_DIRS}
     )
 
     # 设置CUDA特定属性
-    set_target_properties(matrix_multiply PROPERTIES
+    set_target_properties(matmul PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
+    )
+
+    # 添加 ptxas 详细输出选项（显示寄存器、共享内存使用信息）
+    target_compile_options(matmul PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-v>
     )
 else()
     message(WARNING "MatrixMultiply: 未找到源文件，请添加 .cu 或 .cpp 文件")

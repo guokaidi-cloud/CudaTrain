@@ -42,6 +42,10 @@ message(STATUS "CUDA Version: ${CUDAToolkit_VERSION}")
 message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "CUDA Include Dirs: ${CUDAToolkit_INCLUDE_DIRS}")
 
+# 添加顶层目录到 include 路径，以便找到 utils 头文件
+include_directories(${CMAKE_SOURCE_DIR})
+
 # 添加子目录
-add_subdirectory(MatrixMultiply)
+add_subdirectory(utils)
+add_subdirectory(Matmul)
 

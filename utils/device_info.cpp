@@ -1,5 +1,5 @@
-#include "device_info.h"
-#include "cuda_utils.h"
+#include "device_info.hpp"
+#include "cuda_utils.hpp"
 #include <cstdio>
 
 void printDeviceInfo(int deviceId) {

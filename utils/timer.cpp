@@ -1,7 +1,7 @@
 #include "timer.hpp"
 #include "cuda_runtime.h"
 #include "cuda_runtime_api.h"
-#include "cuda_utils.h"
+#include "cuda_utils.hpp"
 #include <chrono>
 #include <iostream>
 #include <memory>

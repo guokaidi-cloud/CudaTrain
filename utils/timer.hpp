@@ -2,7 +2,7 @@
 #define TIMER_HPP
 
 #include "cuda_runtime.h"
-#include "cuda_utils.h"
+#include "cuda_utils.hpp"
 #include <chrono>
 #include <ratio>
 #include <string>

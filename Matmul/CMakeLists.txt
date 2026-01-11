@@ -13,9 +13,10 @@ if(CUDA_SOURCES OR CPP_SOURCES)
         ${HEADERS}
     )
 
-    # 链接CUDA运行时库和工具库
+    # 链接CUDA运行时库、cuBLAS和工具库
     target_link_libraries(matmul PRIVATE
         CUDA::cudart
+        CUDA::cublas
         cuda_utils
     )
 

@@ -48,4 +48,5 @@ include_directories(${CMAKE_SOURCE_DIR})
 # 添加子目录
 add_subdirectory(utils)
 add_subdirectory(Matmul)
+add_subdirectory(Reduce)
 

@@ -28,7 +28,9 @@ __global__ void reduceEliminatePallelSharedMemory(float *input, float *output, i
 
 __global__ void reduceEliminateWrapReduce(float *input, float *output, int n);
 
-__global__ void reduceEliminateWrapShuffle(float *input, float *output, int n);
+
+__global__ void reduceEliminateWrapShuffleV1(float *input, float *output, int n);
+__global__ void reduceEliminateWrapShuffleV2(float *input, float *output, int n);
 
 
 // ==================== 辅助函数声明 ====================
@@ -52,5 +54,7 @@ void launchReduceEliminatePallelSharedMemory(float *d_input, float *d_output, in
 
 void launchReduceEliminateWrapReduce(float *d_input, float *d_output, int n);
 
-void launchReduceEliminateWrapShuffle(float *d_input, float *d_output, int n);
+void launchReduceEliminateWrapShuffleV1(float *d_input, float *d_output, int n);
+
+void launchReduceEliminateWrapShuffleV2(float *d_input, float *d_output, int n);
 #endif // REDUCE_HPP

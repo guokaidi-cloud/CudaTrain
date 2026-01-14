@@ -47,7 +47,8 @@ int main() {
   launchReduceEliminateBankConflicts(d_input, d_output, N);
   launchReduceEliminatePallelSharedMemory(d_input, d_output, N);
   launchReduceEliminateWrapReduce(d_input, d_output, N);
-  launchReduceEliminateWrapShuffle(d_input, d_output, N);
+  launchReduceEliminateWrapShuffleV1(d_input, d_output, N);
+  launchReduceEliminateWrapShuffleV2(d_input, d_output, N);
   cudaDeviceSynchronize();
 
   // ========== 测试朴素版本 ==========
@@ -145,19 +146,38 @@ int main() {
     printf("失败!\n");
   }
 
-  // ========== 测试消除 Warp Shuffle 版本 ==========
-  printf("\n--- 测试消除 Warp Shuffle 版本 ---\n");
+  // ========== 测试消除 Warp Shuffle V1 版本 ==========
+  printf("\n--- 测试消除 Warp Shuffle V1 版本 ---\n");
   timer.start_gpu();
-  launchReduceEliminateWrapShuffle(d_input, d_output, N);
+  launchReduceEliminateWrapShuffleV1(d_input, d_output, N);
   timer.stop_gpu();
-  timer.duration_gpu("消除WarpShuffle版本耗时");
+  timer.duration_gpu("消除WarpShuffleV1版本耗时");
 
   // 拷贝结果回主机
   CUDA_CHECK(cudaMemcpy(&h_output, d_output, sizeof(float),
                         cudaMemcpyDeviceToHost));
 
-  // 验证消除 Warp Shuffle 版本
-  printf("验证消除WarpShuffle版本: ");
+  // 验证消除 Warp Shuffle V1 版本
+  printf("验证消除WarpShuffleV1版本: ");
+  if (verifyResult(h_output, h_output_ref)) {
+    printf("通过!\n");
+  } else {
+    printf("失败!\n");
+  }
+
+  // ========== 测试消除 Warp Shuffle V2 版本 ==========
+  printf("\n--- 测试消除 Warp Shuffle V2 版本 ---\n");
+  timer.start_gpu();
+  launchReduceEliminateWrapShuffleV2(d_input, d_output, N);
+  timer.stop_gpu();
+  timer.duration_gpu("消除WarpShuffleV2版本耗时");
+
+  // 拷贝结果回主机
+  CUDA_CHECK(cudaMemcpy(&h_output, d_output, sizeof(float),
+                        cudaMemcpyDeviceToHost));
+
+  // 验证消除 Warp Shuffle V2 版本
+  printf("验证消除WarpShuffleV2版本: ");
   if (verifyResult(h_output, h_output_ref)) {
     printf("通过!\n");
   } else {

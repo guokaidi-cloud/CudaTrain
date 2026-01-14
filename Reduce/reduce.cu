@@ -164,7 +164,26 @@ __global__ void reduceEliminateWrapReduce(float *input, float *output, int n) {
 
 // 消除 wrap shuffle 的 reduce kernel
 // 使用 wrap shuffle，确保同一 warp 内的线程执行相同路径
-__global__ void reduceEliminateWrapShuffle(float *input, float *output, int n) {
+__global__ void reduceEliminateWrapShuffleV1(float *input, float *output, int n) {
+  const int WARP_SIZE = 32;
+  int idx = blockDim.x * blockIdx.x + threadIdx.x;
+  int lane_id = threadIdx.x % WARP_SIZE;
+  int warp_id = threadIdx.x / WARP_SIZE;
+
+  float sum = (idx < n) ? input[idx] : 0.0f;
+
+  for(int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+    sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+  }
+
+  if (lane_id == 0) {
+    atomicAdd(output, sum);
+  }
+}
+
+// 消除 wrap shuffle 的 reduce kernel
+// 使用 wrap shuffle，确保同一 warp 内的线程执行相同路径
+__global__ void reduceEliminateWrapShuffleV2(float *input, float *output, int n) {
     const int WARP_SIZE = 32;
     int tid = threadIdx.x;
     int idx = blockDim.x * blockIdx.x * 2 + tid;  // 每个 block 处理 2*blockDim.x 个元素
@@ -299,7 +318,20 @@ void launchReduceEliminateWrapReduce(float *d_input, float *d_output, int n) {
   reduceEliminateWrapReduce<<<numBlocks, blockDim>>>(d_input, d_output, n);
 }
 
-void launchReduceEliminateWrapShuffle(float *d_input, float *d_output, int n) {
+
+void launchReduceEliminateWrapShuffleV1(float *d_input, float *d_output, int n) {
+  dim3 blockDim(BLOCK_SIZE);
+  int numBlocks = CEIL_DIV(n, BLOCK_SIZE);
+
+  // 初始化输出为0
+  CUDA_CHECK(cudaMemset(d_output, 0, sizeof(float)));
+
+  // 一个 kernel 调用即可，所有 block 的结果通过原子操作自动合并
+  reduceEliminateWrapShuffleV1<<<numBlocks, blockDim>>>(d_input, d_output, n);
+}
+
+
+void launchReduceEliminateWrapShuffleV2(float *d_input, float *d_output, int n) {
   dim3 blockDim(BLOCK_SIZE);
   // 每个 block 处理 2 * BLOCK_SIZE 个元素（每个线程处理2个元素）
   int numBlocks = CEIL_DIV(n, BLOCK_SIZE * 2);
@@ -308,5 +340,5 @@ void launchReduceEliminateWrapShuffle(float *d_input, float *d_output, int n) {
   CUDA_CHECK(cudaMemset(d_output, 0, sizeof(float)));
 
   // 一个 kernel 调用即可，所有 block 的结果通过原子操作自动合并
-  reduceEliminateWrapShuffle<<<numBlocks, blockDim>>>(d_input, d_output, n);
+  reduceEliminateWrapShuffleV2<<<numBlocks, blockDim>>>(d_input, d_output, n);
 }

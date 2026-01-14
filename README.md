@@ -1,1 +1,1 @@
-Cuda算子和NV GPU特效学习
+Cuda算子和NV GPU特性学习

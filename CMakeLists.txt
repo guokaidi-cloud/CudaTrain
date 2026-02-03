@@ -1,5 +1,24 @@
 cmake_minimum_required(VERSION 3.18)
 
+# 在 project() 之前设置 CUDA 编译器路径（如果未找到）
+if(NOT DEFINED CMAKE_CUDA_COMPILER)
+    # 尝试常见的 CUDA 安装路径
+    find_program(CUDA_NVCC_EXECUTABLE
+        NAMES nvcc
+        PATHS
+            /usr/local/cuda/bin
+            ENV CUDA_PATH
+            ENV CUDA_HOME
+        PATH_SUFFIXES bin
+        NO_DEFAULT_PATH
+    )
+    if(CUDA_NVCC_EXECUTABLE)
+        get_filename_component(CUDA_BIN_DIR ${CUDA_NVCC_EXECUTABLE} DIRECTORY)
+        set(CMAKE_CUDA_COMPILER ${CUDA_NVCC_EXECUTABLE} CACHE FILEPATH "CUDA compiler")
+        message(STATUS "Found CUDA compiler: ${CMAKE_CUDA_COMPILER}")
+    endif()
+endif()
+
 # 项目名称和语言
 project(CudaTrain LANGUAGES CXX CUDA)
 

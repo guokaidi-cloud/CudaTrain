@@ -49,6 +49,8 @@ int main() {
   launchReduceEliminateWrapReduce(d_input, d_output, N);
   launchReduceEliminateWrapShuffleV1(d_input, d_output, N);
   launchReduceEliminateWrapShuffleV2(d_input, d_output, N);
+  launchreduceBlockCUB(d_input, d_output, N);
+  launchreduceBlockCUBV2(d_input, d_output, N);
   cudaDeviceSynchronize();
 
   // ========== 测试朴素版本 ==========
@@ -178,6 +180,44 @@ int main() {
 
   // 验证消除 Warp Shuffle V2 版本
   printf("验证消除WarpShuffleV2版本: ");
+  if (verifyResult(h_output, h_output_ref)) {
+    printf("通过!\n");
+  } else {
+    printf("失败!\n");
+  }
+
+  // ========== 测试 CUB 库版本 ==========
+  printf("\n--- 测试 CUB 库版本 ---\n");
+  timer.start_gpu();
+  launchreduceBlockCUB(d_input, d_output, N);
+  timer.stop_gpu();
+  timer.duration_gpu("CUB库版本耗时");
+
+  // 拷贝结果回主机
+  CUDA_CHECK(cudaMemcpy(&h_output, d_output, sizeof(float),
+                        cudaMemcpyDeviceToHost));
+
+  // 验证 CUB 库版本
+  printf("验证CUB库版本: ");
+  if (verifyResult(h_output, h_output_ref)) {
+    printf("通过!\n");
+  } else {
+    printf("失败!\n");
+  }
+
+  // ========== 测试 CUB 库版本 V2 ==========
+  printf("\n--- 测试 CUB 库版本 V2 ---\n");
+  timer.start_gpu();
+  launchreduceBlockCUBV2(d_input, d_output, N);
+  timer.stop_gpu();
+  timer.duration_gpu("CUB库版本V2耗时");
+
+  // 拷贝结果回主机
+  CUDA_CHECK(cudaMemcpy(&h_output, d_output, sizeof(float),
+                        cudaMemcpyDeviceToHost));
+
+  // 验证 CUB 库版本 V2
+  printf("验证CUB库版本V2: ");
   if (verifyResult(h_output, h_output_ref)) {
     printf("通过!\n");
   } else {

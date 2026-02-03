@@ -3,6 +3,13 @@
 #include <cmath>
 #include <cstdio>
 
+// 在包含 CUB 之前取消 N 的定义，避免与 CUB 库内部冲突
+#ifdef N
+#undef N
+#endif
+
+#include <cub/cub.cuh>
+
 // ==================== Kernel 实现 ====================
 
 // 朴素的 reduce kernel（求和）
@@ -223,7 +230,48 @@ __global__ void reduceEliminateWrapShuffleV2(float *input, float *output, int n)
     if(warp_id == 0 && lane_id == 0){
         atomicAdd(output, sum);
     }
+}
 
+
+__global__ void reduceBlockCUB(float *input, float *output, int n) {
+  // 使用 CUB 的 BlockReduce API（设备端 API，可以在 kernel 中使用）
+  typedef cub::BlockReduce<float, BLOCK_SIZE> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+  
+  int tid = threadIdx.x;
+  int idx = blockDim.x * blockIdx.x + threadIdx.x;
+  
+  // 每个线程加载一个元素
+  float sum = (idx < n) ? input[idx] : 0.0f;
+  
+  // 使用 CUB BlockReduce 在 block 内进行归约
+  sum = BlockReduce(temp_storage).Sum(sum);
+  
+  // 第一个线程使用原子操作累加到全局输出
+  if (tid == 0) {
+    atomicAdd(output, sum);
+  }
+}
+
+__global__ void reduceBlockCUBV2(float *input, float *output, int n) {
+  // 与第一个版本对比，每个 block 处理 2*blockDim.x 个元素
+  typedef cub::BlockReduce<float, BLOCK_SIZE> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+  
+  int tid = threadIdx.x;
+  int idx = blockDim.x * blockIdx.x * 2 + threadIdx.x; // 每个 block 处理 2*blockDim.x 个元素
+  
+  // 每个线程加载一个元素
+  float sum1 = (idx < n) ? input[idx] : 0.0f;
+  float sum2 = (idx + blockDim.x < n) ? input[idx + blockDim.x] : 0.0f;
+  
+  // 使用 CUB BlockReduce 在 block 内进行归约
+  float sum = BlockReduce(temp_storage).Sum(sum1 + sum2);
+  
+  // 第一个线程使用原子操作累加到全局输出
+  if (tid == 0) {
+    atomicAdd(output, sum);
+  }
 }
 // ==================== 辅助函数实现 ====================
 
@@ -341,4 +389,26 @@ void launchReduceEliminateWrapShuffleV2(float *d_input, float *d_output, int n) 
 
   // 一个 kernel 调用即可，所有 block 的结果通过原子操作自动合并
   reduceEliminateWrapShuffleV2<<<numBlocks, blockDim>>>(d_input, d_output, n);
+}
+
+void launchreduceBlockCUB(float *d_input, float *d_output, int n) {
+  dim3 blockDim(BLOCK_SIZE);
+  int numBlocks = CEIL_DIV(n, BLOCK_SIZE);
+
+  // 初始化输出为0
+  CUDA_CHECK(cudaMemset(d_output, 0, sizeof(float)));
+
+  // 一个 kernel 调用即可，所有 block 的结果通过原子操作自动合并
+  reduceBlockCUB<<<numBlocks, blockDim>>>(d_input, d_output, n);
+}
+
+void launchreduceBlockCUBV2(float *d_input, float *d_output, int n) {
+  dim3 blockDim(BLOCK_SIZE);
+  int numBlocks = CEIL_DIV(n, 2 * BLOCK_SIZE);
+
+  // 初始化输出为0
+  CUDA_CHECK(cudaMemset(d_output, 0, sizeof(float)));
+
+  // 一个 kernel 调用即可，所有 block 的结果通过原子操作自动合并
+  reduceBlockCUBV2<<<numBlocks, blockDim>>>(d_input, d_output, n);
 }

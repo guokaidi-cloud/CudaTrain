@@ -67,6 +67,7 @@ include_directories(${CMAKE_SOURCE_DIR})
 # 添加子目录
 add_subdirectory(utils)
 add_subdirectory(Matmul)
+add_subdirectory(Histogram)
 add_subdirectory(Reduce)
 add_subdirectory(ElementWise)
 add_subdirectory(CUB)

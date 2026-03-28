@@ -97,7 +97,8 @@ void launchHistogramDeviceCub(const unsigned int *d_input, unsigned int *d_hist,
 void launchHistogramShared(const unsigned int *d_input, unsigned int *d_hist,
                            int n, int numBins) {
   const int blockSize = 256;
-  const int maxBlocks = 4096;  // 限制 block 数，使 stride < n 时每个线程处理多元素
+  const int maxBlocks =
+      4096; // 限制 block 数，使 stride < n 时每个线程处理多元素
   const int gridSize = min(CEIL_DIV(n, blockSize), maxBlocks);
   histogramShared<<<gridSize, blockSize, numBins * sizeof(unsigned int)>>>(
       d_input, d_hist, n, numBins);

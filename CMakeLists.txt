@@ -71,4 +71,6 @@ add_subdirectory(Histogram)
 add_subdirectory(Reduce)
 add_subdirectory(ElementWise)
 add_subdirectory(CUB)
+add_subdirectory(TensorCore)
+# add_subdirectory(Resize)
 

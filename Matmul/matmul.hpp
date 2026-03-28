@@ -6,7 +6,7 @@
 // ==================== 宏定义 ====================
 
 // 矩阵大小
-#define N 2048
+#define N 1024
 #define BLOCK_SIZE 32
 #define CEIL_DIV(x, y) (((x) + (y)-1) / (y))
 

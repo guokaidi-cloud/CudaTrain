@@ -1,4 +1,5 @@
 // code reference: https://leimao.github.io/blog/NVIDIA-Tensor-Core-Programming/
+// reference: https://developer.nvidia.com/blog/programming-tensor-cores-cuda-9/
 
 #include <cassert>
 #include <chrono>

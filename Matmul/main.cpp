@@ -178,6 +178,40 @@ int main() {
     printf("失败!\n");
   }
 
+  // 运行 Warp Tiling 版本 - 带循环展开优化
+  timer.start_gpu();
+  launchMatrixMulWarpTilingUnroll(d_A, d_B, d_C, N);
+  timer.stop_gpu();
+  timer.duration_gpu("WarpTilingUnroll版本耗时");
+
+  // 拷贝结果回主机
+  CUDA_CHECK(cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost));
+
+  // 验证 Warp Tiling 版本 - 带循环展开优化
+  printf("验证WarpTilingUnroll版本: ");
+  if (verifyResult(h_C, h_C_ref, N)) {
+    printf("通过!\n");
+  } else {
+    printf("失败!\n");
+  }
+
+  // 运行 Warp Tiling 版本 - 双缓冲 + 循环展开
+  timer.start_gpu();
+  launchMatrixMulWarpTilingUnrollDoubleBuffer(d_A, d_B, d_C, N);
+  timer.stop_gpu();
+  timer.duration_gpu("WarpTilingUnrollDoubleBuffer版本耗时");
+
+  // 拷贝结果回主机
+  CUDA_CHECK(cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost));
+
+  // 验证 Warp Tiling 版本 - 双缓冲 + 循环展开
+  printf("验证WarpTilingUnrollDoubleBuffer版本: ");
+  if (verifyResult(h_C, h_C_ref, N)) {
+    printf("通过!\n");
+  } else {
+    printf("失败!\n");
+  }
+
   // 运行 cuBLAS SGEMM
   // 注意: cuBLAS 使用列优先存储，C = alpha*A*B + beta*C
   // 对于行优先的矩阵，使用 C^T = B^T * A^T，即交换 A 和 B

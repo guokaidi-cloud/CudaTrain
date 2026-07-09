@@ -63,7 +63,7 @@ __global__ void matrixMulSharedMemory(float *A, float *B, float *C, int k) {
 
   float tmp = 0.0f;
 
-  // 沿着 k 维度分块迭代
+  // 沿着 k 维度分块迭代，分两个循环的原因是因为共享内存不够
   for (int bkIdx = 0; bkIdx < k; bkIdx += BLOCK_SIZE) {
     // 将 A 和 B 的一个 block 加载到共享内存
     // threadCol 作为连续索引，实现 coalesced 访问
@@ -79,7 +79,9 @@ __global__ void matrixMulSharedMemory(float *A, float *B, float *C, int k) {
 
     // 计算当前 block 的点积
     for (int dotIdx = 0; dotIdx < BLOCK_SIZE; ++dotIdx) {
-      tmp += As[threadRow][dotIdx] * Bs[dotIdx][threadCol];
+      // 对As: warp中每个As中的threadRow一样,dotIdx一样，即访问同一个数
+      // 对Bs: warp中dotIdx一样，threadCol递增，即访问bank 0-31， 没有bank conflict的问题
+      tmp += As[threadRow][dotIdx] * Bs[dotIdx][threadCol];  
     }
 
     // 等待所有线程计算完成，再加载下一个 block
@@ -445,6 +447,376 @@ __global__ void matrixMulWarpTiling(float *A, float *B, float *C, int k) {
   }
 }
 
+// Warp Tiling 优化版本 - 带循环展开优化
+// 使用 #pragma unroll 手动展开关键循环
+__global__ void matrixMulWarpTilingUnroll(float *A, float *B, float *C, int k) {
+  // 转置存储 A，正常存储 B
+  __shared__ float As[BKW * BMW];
+  __shared__ float Bs[BKW * BNW];
+
+  const uint cRow = blockIdx.y;
+  const uint cCol = blockIdx.x;
+
+  // Block 内的 warp 布局
+  const uint warpIdx = threadIdx.x / WARPSIZE;
+  const uint warpCol = warpIdx % (BNW / WN);
+  const uint warpRow = warpIdx / (BNW / WN);
+
+  // 线程在 warp 内的位置
+  const uint threadIdxInWarp = threadIdx.x % WARPSIZE;
+  const uint threadColInWarp = threadIdxInWarp % (WSUBN / TNW);
+  const uint threadRowInWarp = threadIdxInWarp / (WSUBN / TNW);
+
+  // 加载参数
+  const uint numThreadsBlocktile = BMW * BNW / (TMW * TNW * WMITER * WNITER);
+
+  const uint innerRowA = threadIdx.x / (BKW / 4);
+  const uint innerColA = threadIdx.x % (BKW / 4);
+  const uint strideA = numThreadsBlocktile / (BKW / 4);
+
+  const uint innerRowB = threadIdx.x / (BNW / 4);
+  const uint innerColB = threadIdx.x % (BNW / 4);
+  const uint strideB = numThreadsBlocktile / (BNW / 4);
+
+  // 移动指针到当前 block 的起始位置
+  A += cRow * BMW * k;
+  B += cCol * BNW;
+  C += cRow * BMW * k + cCol * BNW;
+
+  // 每个线程的结果寄存器
+  float threadResults[WMITER * TMW * WNITER * TNW] = {0.0};
+  float regM[WMITER * TMW] = {0.0};
+  float regN[WNITER * TNW] = {0.0};
+
+  // 外循环：遍历 K 维度的 block tiles
+  for (uint bkIdx = 0; bkIdx < k; bkIdx += BKW) {
+    // 使用 float4 向量化加载，同时转置 A - 展开加载循环
+    #pragma unroll
+    for (uint loadOffset = 0; loadOffset < BMW; loadOffset += strideA) {
+      float4 tmp = reinterpret_cast<float4 *>(
+          &A[(innerRowA + loadOffset) * k + innerColA * 4])[0];
+      As[(innerColA * 4 + 0) * BMW + innerRowA + loadOffset] = tmp.x;
+      As[(innerColA * 4 + 1) * BMW + innerRowA + loadOffset] = tmp.y;
+      As[(innerColA * 4 + 2) * BMW + innerRowA + loadOffset] = tmp.z;
+      As[(innerColA * 4 + 3) * BMW + innerRowA + loadOffset] = tmp.w;
+    }
+
+    // 加载 B 矩阵 - 展开加载循环
+    #pragma unroll
+    for (uint loadOffset = 0; loadOffset < BKW; loadOffset += strideB) {
+      reinterpret_cast<float4 *>(
+          &Bs[(innerRowB + loadOffset) * BNW + innerColB * 4])[0] =
+          reinterpret_cast<float4 *>(
+              &B[(innerRowB + loadOffset) * k + innerColB * 4])[0];
+    }
+    __syncthreads();
+
+    A += BKW;
+    B += BKW * k;
+
+    // 计算 warptile
+    for (uint dotIdx = 0; dotIdx < BKW; ++dotIdx) {
+      // 加载 warp 的 A 子块到寄存器 - 展开
+      #pragma unroll
+      for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+        #pragma unroll
+        for (uint i = 0; i < TMW; ++i) {
+          regM[wSubRowIdx * TMW + i] =
+              As[(dotIdx * BMW) + warpRow * WM + wSubRowIdx * WSUBM +
+                 threadRowInWarp * TMW + i];
+        }
+      }
+      
+      // 加载 warp 的 B 子块到寄存器 - 展开
+      #pragma unroll
+      for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+        #pragma unroll
+        for (uint i = 0; i < TNW; ++i) {
+          regN[wSubColIdx * TNW + i] =
+              Bs[(dotIdx * BNW) + warpCol * WN + wSubColIdx * WSUBN +
+                 threadColInWarp * TNW + i];
+        }
+      }
+
+      // 执行 warptile 矩阵乘法（外积累加）- 完全展开！
+      #pragma unroll
+      for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+        #pragma unroll
+        for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+          #pragma unroll
+          for (uint resIdxM = 0; resIdxM < TMW; ++resIdxM) {
+            #pragma unroll
+            for (uint resIdxN = 0; resIdxN < TNW; ++resIdxN) {
+              threadResults[(wSubRowIdx * TMW + resIdxM) * (WNITER * TNW) +
+                            (wSubColIdx * TNW) + resIdxN] +=
+                  regM[wSubRowIdx * TMW + resIdxM] *
+                  regN[wSubColIdx * TNW + resIdxN];
+            }
+          }
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  // 写回结果 - 展开
+  #pragma unroll
+  for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+    #pragma unroll
+    for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+      float *C_interim = C + (warpRow * WM) * k + (warpCol * WN) +
+                         (wSubRowIdx * WSUBM) * k + (wSubColIdx * WSUBN) +
+                         (threadRowInWarp * TMW) * k + (threadColInWarp * TNW);
+      #pragma unroll
+      for (uint resIdxM = 0; resIdxM < TMW; ++resIdxM) {
+        #pragma unroll
+        for (uint resIdxN = 0; resIdxN < TNW; ++resIdxN) {
+          C_interim[resIdxM * k + resIdxN] =
+              threadResults[(wSubRowIdx * TMW + resIdxM) * (WNITER * TNW) +
+                            (wSubColIdx * TNW) + resIdxN];
+        }
+      }
+    }
+  }
+}
+
+// Warp Tiling 优化版本 - 双缓冲 + 循环展开
+__global__ void matrixMulWarpTilingUnrollDoubleBuffer(float *A, float *B, float *C, int k) {
+  // 双缓冲：两套共享内存缓冲区
+  __shared__ float As[2][BKW * BMW];
+  __shared__ float Bs[2][BKW * BNW];
+
+  const uint cRow = blockIdx.y;
+  const uint cCol = blockIdx.x;
+
+  // Block 内的 warp 布局
+  const uint warpIdx = threadIdx.x / WARPSIZE;
+  const uint warpCol = warpIdx % (BNW / WN);
+  const uint warpRow = warpIdx / (BNW / WN);
+
+  // 线程在 warp 内的位置
+  const uint threadIdxInWarp = threadIdx.x % WARPSIZE;
+  const uint threadColInWarp = threadIdxInWarp % (WSUBN / TNW);
+  const uint threadRowInWarp = threadIdxInWarp / (WSUBN / TNW);
+
+  // 加载参数
+  const uint numThreadsBlocktile = BMW * BNW / (TMW * TNW * WMITER * WNITER);
+
+  const uint innerRowA = threadIdx.x / (BKW / 4);
+  const uint innerColA = threadIdx.x % (BKW / 4);
+  const uint strideA = numThreadsBlocktile / (BKW / 4);
+
+  const uint innerRowB = threadIdx.x / (BNW / 4);
+  const uint innerColB = threadIdx.x % (BNW / 4);
+  const uint strideB = numThreadsBlocktile / (BNW / 4);
+
+  // 移动指针到当前 block 的起始位置
+  A += cRow * BMW * k;
+  B += cCol * BNW;
+  C += cRow * BMW * k + cCol * BNW;
+
+  // 每个线程的结果寄存器
+  float threadResults[WMITER * TMW * WNITER * TNW] = {0.0};
+  float regM[WMITER * TMW] = {0.0};
+  float regN[WNITER * TNW] = {0.0};
+
+  // ==========================================
+  // 第一阶段：预加载第一块数据到 buffer 0
+  // ==========================================
+  
+  // 加载 A 矩阵到 As[0]
+  #pragma unroll
+  for (uint loadOffset = 0; loadOffset < BMW; loadOffset += strideA) {
+    float4 tmp = reinterpret_cast<float4 *>(
+        &A[(innerRowA + loadOffset) * k + innerColA * 4])[0];
+    As[0][(innerColA * 4 + 0) * BMW + innerRowA + loadOffset] = tmp.x;
+    As[0][(innerColA * 4 + 1) * BMW + innerRowA + loadOffset] = tmp.y;
+    As[0][(innerColA * 4 + 2) * BMW + innerRowA + loadOffset] = tmp.z;
+    As[0][(innerColA * 4 + 3) * BMW + innerRowA + loadOffset] = tmp.w;
+  }
+
+  // 加载 B 矩阵到 Bs[0]
+  #pragma unroll
+  for (uint loadOffset = 0; loadOffset < BKW; loadOffset += strideB) {
+    reinterpret_cast<float4 *>(
+        &Bs[0][(innerRowB + loadOffset) * BNW + innerColB * 4])[0] =
+        reinterpret_cast<float4 *>(
+            &B[(innerRowB + loadOffset) * k + innerColB * 4])[0];
+  }
+  __syncthreads();
+
+  A += BKW;
+  B += BKW * k;
+
+  // ==========================================
+  // 主循环：计算 + 加载重叠
+  // ==========================================
+  
+  uint bkIdx = BKW;
+  uint readBuffer = 0;
+  uint writeBuffer = 1;
+  
+  for (; bkIdx < k; bkIdx += BKW) {
+    // ------------------------------
+    // Step 1: 预加载下一个数据块
+    // ------------------------------
+    
+    // 加载 A 矩阵到 As[writeBuffer]
+    #pragma unroll
+    for (uint loadOffset = 0; loadOffset < BMW; loadOffset += strideA) {
+      float4 tmp = reinterpret_cast<float4 *>(
+          &A[(innerRowA + loadOffset) * k + innerColA * 4])[0];
+      As[writeBuffer][(innerColA * 4 + 0) * BMW + innerRowA + loadOffset] = tmp.x;
+      As[writeBuffer][(innerColA * 4 + 1) * BMW + innerRowA + loadOffset] = tmp.y;
+      As[writeBuffer][(innerColA * 4 + 2) * BMW + innerRowA + loadOffset] = tmp.z;
+      As[writeBuffer][(innerColA * 4 + 3) * BMW + innerRowA + loadOffset] = tmp.w;
+    }
+
+    // 加载 B 矩阵到 Bs[writeBuffer]
+    #pragma unroll
+    for (uint loadOffset = 0; loadOffset < BKW; loadOffset += strideB) {
+      reinterpret_cast<float4 *>(
+          &Bs[writeBuffer][(innerRowB + loadOffset) * BNW + innerColB * 4])[0] =
+          reinterpret_cast<float4 *>(
+              &B[(innerRowB + loadOffset) * k + innerColB * 4])[0];
+    }
+
+    // ------------------------------
+    // Step 2: 计算当前数据块
+    // ------------------------------
+    
+    for (uint dotIdx = 0; dotIdx < BKW; ++dotIdx) {
+      // 加载 warp 的 A 子块到寄存器
+      #pragma unroll
+      for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+        #pragma unroll
+        for (uint i = 0; i < TMW; ++i) {
+          regM[wSubRowIdx * TMW + i] =
+              As[readBuffer][(dotIdx * BMW) + warpRow * WM + wSubRowIdx * WSUBM +
+                  threadRowInWarp * TMW + i];
+        }
+      }
+      
+      // 加载 warp 的 B 子块到寄存器
+      #pragma unroll
+      for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+        #pragma unroll
+        for (uint i = 0; i < TNW; ++i) {
+          regN[wSubColIdx * TNW + i] =
+              Bs[readBuffer][(dotIdx * BNW) + warpCol * WN + wSubColIdx * WSUBN +
+                  threadColInWarp * TNW + i];
+        }
+      }
+
+      // 执行 warptile 矩阵乘法（外积累加）
+      #pragma unroll
+      for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+        #pragma unroll
+        for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+          #pragma unroll
+          for (uint resIdxM = 0; resIdxM < TMW; ++resIdxM) {
+            #pragma unroll
+            for (uint resIdxN = 0; resIdxN < TNW; ++resIdxN) {
+              threadResults[(wSubRowIdx * TMW + resIdxM) * (WNITER * TNW) +
+                            (wSubColIdx * TNW) + resIdxN] +=
+                  regM[wSubRowIdx * TMW + resIdxM] *
+                  regN[wSubColIdx * TNW + resIdxN];
+            }
+          }
+        }
+      }
+    }
+
+    // ------------------------------
+    // Step 3: 同步并切换 buffer
+    // ------------------------------
+    
+    __syncthreads();
+    A += BKW;
+    B += BKW * k;
+    
+    // 交换 buffer
+    readBuffer = 1 - readBuffer;
+    writeBuffer = 1 - writeBuffer;
+  }
+
+  // ==========================================
+  // 最后阶段：计算最后一个数据块
+  // ==========================================
+
+  for (uint dotIdx = 0; dotIdx < BKW; ++dotIdx) {
+    // 加载 warp 的 A 子块到寄存器
+    #pragma unroll
+    for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+      #pragma unroll
+      for (uint i = 0; i < TMW; ++i) {
+        regM[wSubRowIdx * TMW + i] =
+            As[readBuffer][(dotIdx * BMW) + warpRow * WM + wSubRowIdx * WSUBM +
+                threadRowInWarp * TMW + i];
+      }
+    }
+    
+    // 加载 warp 的 B 子块到寄存器
+    #pragma unroll
+    for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+      #pragma unroll
+      for (uint i = 0; i < TNW; ++i) {
+        regN[wSubColIdx * TNW + i] =
+            Bs[readBuffer][(dotIdx * BNW) + warpCol * WN + wSubColIdx * WSUBN +
+                threadColInWarp * TNW + i];
+      }
+    }
+
+    // 执行 warptile 矩阵乘法（外积累加）
+    #pragma unroll
+    for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+      #pragma unroll
+      for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+        #pragma unroll
+        for (uint resIdxM = 0; resIdxM < TMW; ++resIdxM) {
+          #pragma unroll
+          for (uint resIdxN = 0; resIdxN < TNW; ++resIdxN) {
+            threadResults[(wSubRowIdx * TMW + resIdxM) * (WNITER * TNW) +
+                          (wSubColIdx * TNW) + resIdxN] +=
+                regM[wSubRowIdx * TMW + resIdxM] *
+                regN[wSubColIdx * TNW + resIdxN];
+          }
+        }
+      }
+    }
+  }
+
+  // ==========================================
+  // 写回结果
+  // ==========================================
+  
+  #pragma unroll
+  for (uint wSubRowIdx = 0; wSubRowIdx < WMITER; ++wSubRowIdx) {
+    #pragma unroll
+    for (uint wSubColIdx = 0; wSubColIdx < WNITER; ++wSubColIdx) {
+      float *C_interim = C + (warpRow * WM) * k + (warpCol * WN) +
+                         (wSubRowIdx * WSUBM) * k + (wSubColIdx * WSUBN) +
+                         (threadRowInWarp * TMW) * k + (threadColInWarp * TNW);
+      #pragma unroll
+      for (uint resIdxM = 0; resIdxM < TMW; ++resIdxM) {
+        #pragma unroll
+        for (uint resIdxN = 0; resIdxN < TNW; ++resIdxN) {
+          C_interim[resIdxM * k + resIdxN] =
+              threadResults[(wSubRowIdx * TMW + resIdxM) * (WNITER * TNW) +
+                            (wSubColIdx * TNW) + resIdxN];
+        }
+      }
+    }
+  }
+}
+
+// Warp Tiling 双缓冲版本的启动函数
+void launchMatrixMulWarpTilingUnrollDoubleBuffer(float *d_A, float *d_B, float *d_C, int k) {
+  dim3 blockDim(BMW * BNW / (TMW * TNW * WMITER * WNITER)); // 256 threads
+  dim3 gridDim(CEIL_DIV(k, BNW), CEIL_DIV(k, BMW));
+  matrixMulWarpTilingUnrollDoubleBuffer<<<gridDim, blockDim>>>(d_A, d_B, d_C, k);
+}
+
 // ==================== 辅助函数实现 ====================
 
 // CPU 矩阵乘法（用于验证）
@@ -538,6 +910,13 @@ void launchMatrixMulWarpTiling(float *d_A, float *d_B, float *d_C, int k) {
   matrixMulWarpTiling<<<gridDim, blockDim>>>(d_A, d_B, d_C, k);
 }
 
+// Warp Tiling 版本启动器 - 带循环展开优化
+void launchMatrixMulWarpTilingUnroll(float *d_A, float *d_B, float *d_C, int k) {
+  dim3 blockDim(BMW * BNW / (TMW * TNW * WMITER * WNITER)); // 256 threads
+  dim3 gridDim(CEIL_DIV(k, BNW), CEIL_DIV(k, BMW));
+  matrixMulWarpTilingUnroll<<<gridDim, blockDim>>>(d_A, d_B, d_C, k);
+}
+
 // GPU Warmup - 运行所有 kernel 一次
 void warmupAllKernels(float *d_A, float *d_B, float *d_C, int k) {
   launchMatrixMulNaive(d_A, d_B, d_C, k);
@@ -547,5 +926,7 @@ void warmupAllKernels(float *d_A, float *d_B, float *d_C, int k) {
   launchMatrixMul2DBlockTiling(d_A, d_B, d_C, k);
   launchMatrixMulVectorized(d_A, d_B, d_C, k);
   launchMatrixMulWarpTiling(d_A, d_B, d_C, k);
+  launchMatrixMulWarpTilingUnroll(d_A, d_B, d_C, k);
+  launchMatrixMulWarpTilingUnrollDoubleBuffer(d_A, d_B, d_C, k);
   cudaDeviceSynchronize();
 }

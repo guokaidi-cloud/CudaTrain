@@ -87,6 +87,17 @@ __global__ void matrixMulVectorized(float *A, float *B, float *C, int k);
 // 在 warp 级别进行 tiling，为 Tensor Core 优化做准备
 __global__ void matrixMulWarpTiling(float *A, float *B, float *C, int k);
 
+// Warp Tiling 优化版本 - 带循环展开优化
+// 使用 #pragma unroll 手动展开关键循环
+__global__ void matrixMulWarpTilingUnroll(float *d_A, float *d_B, float *d_C, int k);
+
+// Warp Tiling 优化版本 - 双缓冲 + 循环展开
+// 使用双缓冲技术重叠计算和内存访问，进一步提高性能
+__global__ void matrixMulWarpTilingUnrollDoubleBuffer(float *d_A, float *d_B, float *d_C, int k);
+
+// Warp Tiling 双缓冲版本的启动函数
+void launchMatrixMulWarpTilingUnrollDoubleBuffer(float *d_A, float *d_B, float *d_C, int k);
+
 // ==================== 辅助函数声明 ====================
 
 // CPU 矩阵乘法（用于验证）
@@ -118,6 +129,9 @@ void launchMatrixMulVectorized(float *d_A, float *d_B, float *d_C, int k);
 
 // Warp Tiling 版本启动器
 void launchMatrixMulWarpTiling(float *d_A, float *d_B, float *d_C, int k);
+
+// Warp Tiling 版本启动器 - 带循环展开优化
+void launchMatrixMulWarpTilingUnroll(float *d_A, float *d_B, float *d_C, int k);
 
 // GPU Warmup - 运行所有 kernel 一次
 void warmupAllKernels(float *d_A, float *d_B, float *d_C, int k);

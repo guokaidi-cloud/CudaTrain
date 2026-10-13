@@ -15,7 +15,15 @@ void printDeviceInfo(int deviceId) {
          prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
   printf("  - Warp 大小: %d\n", prop.warpSize);
   printf("  - 计算能力: %d.%d\n", prop.major, prop.minor);
+#if CUDART_VERSION >= 13000
+  // CUDA 13 起 cudaDeviceProp 不再包含 memoryClockRate，改用属性查询（单位仍是 kHz）。
+  int memoryClockKHz = 0;
+  CUDA_CHECK(cudaDeviceGetAttribute(&memoryClockKHz, cudaDevAttrMemoryClockRate,
+                                    deviceId));
+  printf("  - 内存时钟频率: %.2f GHz\n", memoryClockKHz / 1e6);
+#else
   printf("  - 内存时钟频率: %.2f GHz\n", prop.memoryClockRate / 1e6);
+#endif
   printf("  - 内存总线宽度: %d bits\n", prop.memoryBusWidth);
   printf("  - L2 缓存大小: %.2f MB\n", prop.l2CacheSize / (1024.0 * 1024.0));
   printf("====================\n\n");
